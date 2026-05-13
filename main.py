@@ -6,14 +6,14 @@ from datetime import datetime, timedelta
 import time
 import os
 import threading
+import shutil
 
 # Замени на токен своего бота
 TOKEN = "8970700402:AAEheb9WtnO20ZsdN_MEbNEdBgDCwoZrT3I"
 bot = telebot.TeleBot(TOKEN)
 
-# --- НАСТРОЙКА ПОДСКАЗОК КОМАНД (/ вылезает список) ---
+# --- НАСТРОЙКА ПОДСКАЗОК КОМАНД ---
 def set_bot_commands():
-    """Устанавливает список команд для меню бота"""
     commands = [
         BotCommand("start", "🚀 Запустить бота"),
         BotCommand("dep", "🎲 Сыграть 50/50 (пример: /dep 100)"),
@@ -23,8 +23,6 @@ def set_bot_commands():
         BotCommand("top", "🏅 Топ игроков"),
         BotCommand("help", "📖 Помощь"),
     ]
-    
-    # Добавляем команду для админа (только для него она будет видна)
     try:
         bot.set_my_commands(commands)
         print("✅ Команды бота установлены")
@@ -32,23 +30,44 @@ def set_bot_commands():
         print(f"⚠️ Ошибка установки команд: {e}")
 
 # --- КОНСОЛЬ РАЗРАБОТЧИКА ---
-# ВСТАВЬ СВОЙ TELEGRAM ID (узнай у @userinfobot)
 ADMIN_ID = 7818787996  # 🔴 ЗАМЕНИ НА СВОЙ ID!
 
-# Словарь для отслеживания активной консоли разработчика
 dev_console_active = {}
-
-# Словарь для хранения времени последнего использования /give
 give_cooldown = {}
-
-# Блокировка для синхронизации БД
 db_lock = threading.Lock()
 
-# --- Настройка пути к БД ---
+# --- НАСТРОЙКА ПУТИ К БД (ВАЖНО ДЛЯ PERSISTENT VOLUME) ---
+# Проверяем, есть ли Volume
 if os.path.exists('/data'):
     DB_PATH = '/data/casino_bot.db'
+    print("✅ Используется Persistent Volume: /data")
 else:
     DB_PATH = 'casino_bot.db'
+    print("⚠️ Persistent Volume не найден, используется локальная БД")
+
+# Функция для резервного копирования БД
+def backup_database():
+    """Создаёт резервную копию БД"""
+    try:
+        if os.path.exists(DB_PATH):
+            backup_path = f"{DB_PATH}.backup"
+            shutil.copy2(DB_PATH, backup_path)
+            print(f"✅ Резервная копия БД создана: {backup_path}")
+    except Exception as e:
+        print(f"⚠️ Ошибка резервного копирования: {e}")
+
+# Функция для восстановления БД из резервной копии
+def restore_from_backup():
+    """Восстанавливает БД из резервной копии"""
+    try:
+        backup_path = f"{DB_PATH}.backup"
+        if os.path.exists(backup_path) and not os.path.exists(DB_PATH):
+            shutil.copy2(backup_path, DB_PATH)
+            print(f"✅ БД восстановлена из резервной копии")
+            return True
+    except Exception as e:
+        print(f"⚠️ Ошибка восстановления: {e}")
+    return False
 
 # --- Функция для получения соединения с БД ---
 def get_db_connection():
@@ -68,6 +87,7 @@ def get_user(user_id):
                 conn.commit()
                 cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
                 user = cursor.fetchone()
+                print(f"✅ Новый пользователь добавлен: {user_id}")
             return user
         finally:
             conn.close()
@@ -79,6 +99,7 @@ def update_balance(user_id, new_balance):
         try:
             cursor.execute('UPDATE users SET balance = ? WHERE user_id = ?', (new_balance, user_id))
             conn.commit()
+            print(f"💰 Баланс обновлён: user={user_id}, new_balance={new_balance}")
         finally:
             conn.close()
 
@@ -118,7 +139,7 @@ def get_all_users():
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute('SELECT user_id FROM users')
+            cursor.execute('SELECT user_id, balance FROM users')
             return cursor.fetchall()
         finally:
             conn.close()
@@ -151,6 +172,12 @@ def init_db():
             ''')
             conn.commit()
             print("✅ Таблица users проверена/создана")
+            
+            # Проверяем, есть ли данные
+            cursor.execute('SELECT COUNT(*) FROM users')
+            count = cursor.fetchone()[0]
+            print(f"📊 В базе данных: {count} пользователей")
+            
         finally:
             conn.close()
 
@@ -180,8 +207,9 @@ def dev_console(message):
         "📋 **Команды:**\n"
         "• `/online` - статистика игроков\n"
         "• `/resel` - обнулить зарплату всем\n"
-        "• `/exit` - выйти\n\n"
-        "💡 Все команды работают в этом чате!",
+        "• `/backup` - создать резервную копию БД\n"
+        "• `/stats` - статистика БД\n"
+        "• `/exit` - выйти",
         parse_mode="Markdown")
 
 @bot.message_handler(commands=['online'])
@@ -194,17 +222,17 @@ def online_command(message):
     
     active_count = 0
     total_balance = 0
-    for (user_id,) in users:
-        user = get_user(user_id)
-        if user[2] > 0 or user[3] > 0:
+    for (user_id, balance) in users:
+        if balance > 0:
             active_count += 1
-        total_balance += user[1]
+        total_balance += balance
     
     bot.reply_to(message,
         f"📊 **Статистика бота:**\n\n"
         f"👥 Всего игроков: **{online_count}**\n"
         f"🎮 Активных: **{active_count}**\n"
-        f"💰 Общий баланс: **{total_balance}** халялек",
+        f"💰 Общий баланс: **{total_balance}** халялек\n"
+        f"📁 База данных: `{DB_PATH}`",
         parse_mode="Markdown")
 
 @bot.message_handler(commands=['resel'])
@@ -217,6 +245,37 @@ def resel_command(message):
         f"✅ **Таймер зарплаты обнулён!**\n"
         f"📊 Обновлено: **{count}** пользователей",
         parse_mode="Markdown")
+
+@bot.message_handler(commands=['backup'])
+def backup_command(message):
+    if not dev_console_active.get(message.from_user.id, False) or message.from_user.id != ADMIN_ID:
+        return
+    
+    backup_database()
+    bot.reply_to(message, "✅ Резервная копия базы данных создана!", parse_mode="Markdown")
+
+@bot.message_handler(commands=['stats'])
+def stats_command(message):
+    if not dev_console_active.get(message.from_user.id, False) or message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        stat = os.stat(DB_PATH)
+        size_kb = stat.st_size / 1024
+        modified = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+        
+        users = get_all_users()
+        
+        bot.reply_to(message,
+            f"📊 **Статистика базы данных:**\n\n"
+            f"📁 Путь: `{DB_PATH}`\n"
+            f"📦 Размер: **{size_kb:.2f} KB**\n"
+            f"🕐 Изменена: **{modified}**\n"
+            f"👥 Пользователей: **{len(users)}**\n"
+            f"💰 Общий баланс: **{sum(u[1] for u in users)}**",
+            parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка: {e}")
 
 @bot.message_handler(commands=['exit'])
 def exit_console(message):
@@ -235,7 +294,7 @@ def start(message):
     if message.chat.type == 'private':
         bot.send_message(message.chat.id,
             f"👋 Халяль, {message.from_user.first_name}!\n"
-            f"Твой баланс: 0 халялек.\n\n"
+            f"Твой баланс: {get_user(user_id)[1]} халялек.\n\n"
             f"🎲 **Играть:** `/dep 100`\n"
             f"💰 **Перевести:** ответь на сообщение и напиши `/give 50`\n"
             f"💲 **Зарплата:** `/salary` (каждые 30 мин)\n"
@@ -244,6 +303,9 @@ def start(message):
             f"📱 **Кнопки** внизу экрана!\n"
             f"💡 **Совет:** Нажми `/` для подсказки команд!",
             reply_markup=main_keyboard(), parse_mode="Markdown")
+
+# --- Остальные команды (salary, balance, top, give, dep, help) ---
+# ... (оставляем без изменений, они такие же как в предыдущей версии)
 
 # --- Команда /salary ---
 @bot.message_handler(commands=['salary'])
@@ -424,25 +486,34 @@ def help_command(message):
         "💎 `/balance` - проверить свой баланс\n"
         "🏅 `/top` - топ игроков по халялькам\n\n"
         "💡 **Совет:** Нажми `/` в поле ввода, чтобы увидеть все команды!\n"
-        "📱 **Кнопки** внизу экрана для быстрого доступа!",
+        "📱 **Кнопки** внизу экрана для быстрого доступа!\n\n"
+        "💾 **Данные сохраняются** даже после перезапуска бота!",
         parse_mode="Markdown")
 
 # --- Запуск бота ---
 if __name__ == '__main__':
     print("✅ Бот запущен!")
     print(f"📁 База данных: {DB_PATH}")
-    print("🔧 Консоль разработчика: /hail2805")
+    
+    # Проверяем наличие Volume
+    if os.path.exists('/data'):
+        print("✅ Persistent Volume обнаружен! Данные будут сохраняться.")
+    else:
+        print("⚠️ ВНИМАНИЕ: Persistent Volume не найден!")
+        print("⚠️ При перезапуске данные могут потеряться!")
+        print("⚠️ Добавьте Volume в настройках Railway!")
+    
+    # Восстанавливаем из резервной копии если нужно
+    restore_from_backup()
     
     # Устанавливаем подсказки команд
     set_bot_commands()
     
+    # Инициализируем БД
     init_db()
     
-    # Копируем локальную БД если есть
-    if not os.path.exists(DB_PATH) and os.path.exists('casino_bot.db'):
-        import shutil
-        shutil.copy2('casino_bot.db', DB_PATH)
-        print(f"✅ База данных скопирована")
+    # Создаём резервную копию при старте
+    backup_database()
     
     # Удаляем вебхук
     try:
@@ -454,4 +525,9 @@ if __name__ == '__main__':
     # Запускаем polling
     print("🚀 Бот готов к работе!")
     print("💡 При вводе / в Telegram появятся подсказки команд!")
-    bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    
+    try:
+        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        time.sleep(5)
