@@ -1,5 +1,5 @@
 import telebot
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, BotCommand
 import random
 import sqlite3
 from datetime import datetime, timedelta
@@ -10,6 +10,26 @@ import threading
 # Замени на токен своего бота
 TOKEN = "8970700402:AAEheb9WtnO20ZsdN_MEbNEdBgDCwoZrT3I"
 bot = telebot.TeleBot(TOKEN)
+
+# --- НАСТРОЙКА ПОДСКАЗОК КОМАНД (/ вылезает список) ---
+def set_bot_commands():
+    """Устанавливает список команд для меню бота"""
+    commands = [
+        BotCommand("start", "🚀 Запустить бота"),
+        BotCommand("dep", "🎲 Сыграть 50/50 (пример: /dep 100)"),
+        BotCommand("give", "💰 Передать халяльки (ответом на сообщение)"),
+        BotCommand("salary", "💲 Получить зарплату (раз в 30 минут)"),
+        BotCommand("balance", "💎 Проверить баланс"),
+        BotCommand("top", "🏅 Топ игроков"),
+        BotCommand("help", "📖 Помощь"),
+    ]
+    
+    # Добавляем команду для админа (только для него она будет видна)
+    try:
+        bot.set_my_commands(commands)
+        print("✅ Команды бота установлены")
+    except Exception as e:
+        print(f"⚠️ Ошибка установки команд: {e}")
 
 # --- КОНСОЛЬ РАЗРАБОТЧИКА ---
 # ВСТАВЬ СВОЙ TELEGRAM ID (узнай у @userinfobot)
@@ -216,15 +236,16 @@ def start(message):
         bot.send_message(message.chat.id,
             f"👋 Халяль, {message.from_user.first_name}!\n"
             f"Твой баланс: 0 халялек.\n\n"
-            f"🎲 `/dep [сумма]` - сыграть 50/50\n"
-            f"💰 `/give [сумма]` - перевести (ответом)\n"
-            f"💲 `/salary` - зарплата (30 мин)\n"
-            f"💎 `/balance` - баланс\n"
-            f"🏅 `/top` - топ игроков\n\n"
-            f"📱 Кнопки внизу:",
+            f"🎲 **Играть:** `/dep 100`\n"
+            f"💰 **Перевести:** ответь на сообщение и напиши `/give 50`\n"
+            f"💲 **Зарплата:** `/salary` (каждые 30 мин)\n"
+            f"💎 **Баланс:** `/balance`\n"
+            f"🏅 **Топ:** `/top`\n\n"
+            f"📱 **Кнопки** внизу экрана!\n"
+            f"💡 **Совет:** Нажми `/` для подсказки команд!",
             reply_markup=main_keyboard(), parse_mode="Markdown")
 
-# --- Команда /salary (с секундами и 30 минутами) ---
+# --- Команда /salary ---
 @bot.message_handler(commands=['salary'])
 def salary_command(message):
     user_id = message.from_user.id
@@ -329,7 +350,7 @@ def give_money(message):
     
     receiver_name = f"@{message.reply_to_message.from_user.username}" if message.reply_to_message.from_user.username else message.reply_to_message.from_user.first_name
     
-    bot.reply_to(message, f"✅ Переведено {amount} халялек для {receiver_name}\n💎 Баланс: {new_sender_balance}")
+    bot.reply_to(message, f"✅ Переведено {amount} халялек для {receiver_name}\n💎 Твой баланс: {new_sender_balance}")
     
     try:
         bot.send_message(receiver_id, f"🎁 Получен перевод {amount} халялек от {message.from_user.first_name}\n💎 Баланс: {new_receiver_balance}")
@@ -362,7 +383,7 @@ def dep(message):
     args = message.text.split()
     
     if len(args) != 2:
-        bot.reply_to(message, "❗ Формат: `/dep [сумма]`", parse_mode="Markdown")
+        bot.reply_to(message, "❗ Формат: `/dep [сумма]`\nПример: `/dep 100`", parse_mode="Markdown")
         return
     
     try:
@@ -396,20 +417,24 @@ def dep(message):
 @bot.message_handler(commands=['help'])
 def help_command(message):
     bot.reply_to(message,
-        "📖 **Команды:**\n\n"
-        "🎲 `/dep [сумма]` - сыграть 50/50\n"
-        "💰 `/give [сумма]` - перевести (ответом)\n"
-        "💲 `/salary` - зарплата (30 мин)\n"
-        "💎 `/balance` - баланс\n"
-        "🏅 `/top` - топ игроков\n\n"
-        "🔧 Для админа: `/hail2805`",
+        "📖 **Команды бота:**\n\n"
+        "🎲 `/dep [сумма]` - сыграть 50/50 (удвоить или потерять)\n"
+        "💰 `/give [сумма]` - перевести халяльки (ответом на сообщение)\n"
+        "💲 `/salary` - получить зарплату 100 халялек (каждые 30 мин)\n"
+        "💎 `/balance` - проверить свой баланс\n"
+        "🏅 `/top` - топ игроков по халялькам\n\n"
+        "💡 **Совет:** Нажми `/` в поле ввода, чтобы увидеть все команды!\n"
+        "📱 **Кнопки** внизу экрана для быстрого доступа!",
         parse_mode="Markdown")
 
-# --- Запуск бота (polling вместо webhook) ---
+# --- Запуск бота ---
 if __name__ == '__main__':
     print("✅ Бот запущен!")
     print(f"📁 База данных: {DB_PATH}")
     print("🔧 Консоль разработчика: /hail2805")
+    
+    # Устанавливаем подсказки команд
+    set_bot_commands()
     
     init_db()
     
@@ -428,4 +453,5 @@ if __name__ == '__main__':
     
     # Запускаем polling
     print("🚀 Бот готов к работе!")
+    print("💡 При вводе / в Telegram появятся подсказки команд!")
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
