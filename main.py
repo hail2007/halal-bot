@@ -37,49 +37,103 @@ give_cooldown = {}
 db_lock = threading.Lock()
 
 # --- НАСТРОЙКА ПУТИ К БД ---
-# Проверяем наличие Volume в Railway
-if os.path.exists('/data'):
-    DB_PATH = '/data/casino_bot.db'
-    print("✅ Обнаружен Persistent Volume, БД будет в /data/")
-else:
-    DB_PATH = 'casino_bot.db'
-    print("⚠️ Persistent Volume не найден, БД будет локально")
+DB_PATH = '/data/casino_bot.db'  # Всегда используем Volume
+BACKUP_PATH = 'casino_bot.db'     # БД в репозитории
 
-# --- ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ СУЩЕСТВУЮЩЕЙ БД ---
-def load_existing_database():
-    """Загружает существующую БД из репозитория в Volume"""
+# --- ФУНКЦИЯ ДЛЯ ПРИНУДИТЕЛЬНОЙ ЗАГРУЗКИ БД ---
+def force_load_database():
+    """Принудительно копирует БД из репозитория в Volume"""
     
-    # Путь к БД в репозитории (откуда берётся при деплое)
-    repo_db_path = 'casino_bot.db'
+    print("\n" + "=" * 50)
+    print("📁 ПРОВЕРКА БАЗЫ ДАННЫХ")
+    print("=" * 50)
     
-    # Проверяем, есть ли БД в репозитории
-    if os.path.exists(repo_db_path):
-        repo_size = os.path.getsize(repo_db_path)
-        print(f"📁 Найдена БД в репозитории: {repo_size} байт")
+    # 1. Проверяем, есть ли БД в репозитории
+    if os.path.exists(BACKUP_PATH):
+        repo_size = os.path.getsize(BACKUP_PATH)
+        print(f"✅ Найдена БД в репозитории: {repo_size} байт")
         
-        # Проверяем, существует ли уже БД в Volume
-        if os.path.exists(DB_PATH):
-            volume_size = os.path.getsize(DB_PATH)
-            print(f"📁 БД в Volume: {volume_size} байт")
+        # Показываем содержимое БД из репозитория
+        try:
+            conn = sqlite3.connect(BACKUP_PATH)
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM users')
+            count = cursor.fetchone()[0]
+            print(f"📊 В БД репозитория: {count} пользователей")
             
-            # Если БД в Volume меньше 1KB (пустая) и есть большая БД в репозитории
-            if volume_size < 1024 and repo_size > 1024:
-                print("🔄 Обнаружена пустая БД в Volume. Копирую из репозитория...")
-                shutil.copy2(repo_db_path, DB_PATH)
-                print(f"✅ БД скопирована из репозитория в {DB_PATH}")
-                return True
-        else:
-            # БД в Volume не существует, копируем из репозитория
-            print("🔄 БД в Volume не найдена. Копирую из репозитория...")
-            # Создаём папку если нужно
-            os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-            shutil.copy2(repo_db_path, DB_PATH)
-            print(f"✅ БД скопирована из репозитория в {DB_PATH}")
-            return True
+            if count > 0:
+                cursor.execute('SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 5')
+                top = cursor.fetchall()
+                print("🏆 Топ из репозитория:")
+                for uid, bal in top:
+                    print(f"   - {uid}: {bal} халялек")
+            conn.close()
+        except Exception as e:
+            print(f"⚠️ Ошибка чтения БД репозитория: {e}")
     else:
-        print("⚠️ БД в репозитории не найдена, будет создана новая")
+        print(f"❌ БД в репозитории не найдена! Искал: {BACKUP_PATH}")
+        print("   Создам новую пустую БД")
+        return False
     
-    return False
+    # 2. Проверяем, есть ли БД в Volume
+    if os.path.exists(DB_PATH):
+        volume_size = os.path.getsize(DB_PATH)
+        print(f"📁 БД в Volume: {volume_size} байт")
+        
+        # Проверяем, сколько пользователей в Volume
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM users')
+            volume_count = cursor.fetchone()[0]
+            print(f"📊 В БД Volume: {volume_count} пользователей")
+            conn.close()
+        except Exception as e:
+            print(f"⚠️ Ошибка чтения Volume: {e}")
+            volume_count = 0
+    else:
+        print(f"📁 БД в Volume не существует")
+        volume_count = 0
+    
+    # 3. Решаем, нужно ли копировать
+    if volume_count == 0:
+        print("\n🔄 Обнаружена пустая БД в Volume! Копирую из репозитория...")
+        
+        # Создаём папку /data если её нет
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        
+        # Копируем файл
+        shutil.copy2(BACKUP_PATH, DB_PATH)
+        print(f"✅ БД скопирована!")
+        
+        # Проверяем результат
+        if os.path.exists(DB_PATH):
+            new_size = os.path.getsize(DB_PATH)
+            print(f"📁 Новая БД в Volume: {new_size} байт")
+            
+            # Показываем содержимое скопированной БД
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM users')
+                new_count = cursor.fetchone()[0]
+                print(f"📊 В скопированной БД: {new_count} пользователей")
+                
+                if new_count > 0:
+                    cursor.execute('SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 5')
+                    top = cursor.fetchall()
+                    print("🏆 Топ из новой БД:")
+                    for uid, bal in top:
+                        print(f"   - {uid}: {bal} халялек")
+                conn.close()
+            except Exception as e:
+                print(f"⚠️ Ошибка: {e}")
+        else:
+            print("❌ Ошибка копирования!")
+        return True
+    else:
+        print("\n✅ БД в Volume уже содержит данные, копирование не требуется")
+        return True
 
 # --- Функция для получения соединения с БД ---
 def get_db_connection():
@@ -111,7 +165,6 @@ def update_balance(user_id, new_balance):
         try:
             cursor.execute('UPDATE users SET balance = ? WHERE user_id = ?', (new_balance, user_id))
             conn.commit()
-            print(f"💰 Баланс обновлён: user={user_id}, balance={new_balance}")
         finally:
             conn.close()
 
@@ -167,36 +220,23 @@ def reset_all_salaries():
         finally:
             conn.close()
 
-def init_db():
-    """Инициализирует БД и показывает статистику"""
+def show_db_stats():
+    """Показывает статистику БД"""
     with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users
-                (
-                    user_id INTEGER PRIMARY KEY,
-                    balance INTEGER DEFAULT 0,
-                    total_bet INTEGER DEFAULT 0,
-                    total_win INTEGER DEFAULT 0,
-                    last_salary TIMESTAMP
-                )
-            ''')
-            conn.commit()
-            
-            # Показываем статистику
             cursor.execute('SELECT COUNT(*) FROM users')
             count = cursor.fetchone()[0]
-            print(f"📊 В БД: {count} пользователей")
+            print(f"\n📊 СТАТИСТИКА БД:")
+            print(f"   Пользователей: {count}")
             
             if count > 0:
                 cursor.execute('SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 5')
                 top = cursor.fetchall()
-                print("🏆 Топ пользователей:")
+                print(f"   Топ 5 по балансу:")
                 for uid, bal in top:
-                    print(f"   - {uid}: {bal} халялек")
-            
+                    print(f"      - {uid}: {bal}")
         finally:
             conn.close()
 
@@ -495,38 +535,39 @@ def help_command(message):
 
 # --- Запуск бота ---
 if __name__ == '__main__':
-    print("=" * 50)
+    print("=" * 60)
     print("🚀 ЗАПУСК БОТА")
-    print("=" * 50)
+    print("=" * 60)
     
-    # 1. Загружаем существующую БД из репозитория
-    print("\n📁 Шаг 1: Загрузка базы данных...")
-    load_existing_database()
+    # 1. Принудительно загружаем БД из репозитория
+    print("\n📁 ШАГ 1: Загрузка базы данных...")
+    force_load_database()
     
-    # 2. Инициализируем БД и показываем статистику
-    print("\n📁 Шаг 2: Инициализация БД...")
-    init_db()
+    # 2. Показываем статистику БД
+    print("\n📊 ШАГ 2: Статистика базы данных...")
+    show_db_stats()
     
     # 3. Устанавливаем команды
-    print("\n🔧 Шаг 3: Настройка команд...")
+    print("\n🔧 ШАГ 3: Настройка команд...")
     set_bot_commands()
     
     # 4. Удаляем вебхук
-    print("\n🌐 Шаг 4: Настройка webhook...")
+    print("\n🌐 ШАГ 4: Настройка webhook...")
     try:
         bot.remove_webhook()
         print("✅ Webhook удалён")
     except Exception as e:
         print(f"⚠️ Ошибка: {e}")
     
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 60)
     print("✅ БОТ ГОТОВ К РАБОТЕ!")
     print(f"📁 База данных: {DB_PATH}")
-    print(f"📁 Файл существует: {os.path.exists(DB_PATH)}")
     if os.path.exists(DB_PATH):
         print(f"📁 Размер БД: {os.path.getsize(DB_PATH)} байт")
+    else:
+        print("❌ БД не найдена!")
     print("🔧 Консоль разработчика: /hail2805")
-    print("=" * 50)
+    print("=" * 60)
     
     # Запускаем polling
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
