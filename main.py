@@ -1,4 +1,3 @@
-from flask import Flask, request
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 import random
@@ -12,20 +11,18 @@ import threading
 TOKEN = "8970700402:AAEheb9WtnO20ZsdN_MEbNEdBgDCwoZrT3I"
 bot = telebot.TeleBot(TOKEN)
 
-# Создаём Flask приложение
-app = Flask(__name__)
-
-# Словарь для хранения времени последнего использования /give
-give_cooldown = {}
-# Блокировка для синхронизации БД
-db_lock = threading.Lock()
-
 # --- КОНСОЛЬ РАЗРАБОТЧИКА ---
-# Замени на свой Telegram ID (узнать можно у бота @userinfobot)
-ADMIN_ID = 7818787996  # ВСТАВЬ СВОЙ ID СЮДА!
+# ВСТАВЬ СВОЙ TELEGRAM ID (узнай у @userinfobot)
+ADMIN_ID = 7818787996  # 🔴 ЗАМЕНИ НА СВОЙ ID!
 
 # Словарь для отслеживания активной консоли разработчика
 dev_console_active = {}
+
+# Словарь для хранения времени последнего использования /give
+give_cooldown = {}
+
+# Блокировка для синхронизации БД
+db_lock = threading.Lock()
 
 # --- Настройка пути к БД ---
 if os.path.exists('/data'):
@@ -35,7 +32,6 @@ else:
 
 # --- Функция для получения соединения с БД ---
 def get_db_connection():
-    """Создаёт новое соединение с БД"""
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 # --- Функции БД ---
@@ -98,7 +94,6 @@ def get_top_players(limit=10):
             conn.close()
 
 def get_all_users():
-    """Получает всех пользователей бота"""
     with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -109,7 +104,6 @@ def get_all_users():
             conn.close()
 
 def reset_all_salaries():
-    """Обнуляет таймер зарплаты для всех пользователей"""
     with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -152,73 +146,65 @@ def main_keyboard():
 # --- КОНСОЛЬ РАЗРАБОТЧИКА ---
 @bot.message_handler(commands=['hail2805'])
 def dev_console(message):
-    # Проверяем, что команда в личных сообщениях
     if message.chat.type != 'private':
-        bot.reply_to(message, "❌ Эта команда работает только в личных сообщениях!")
+        bot.reply_to(message, "❌ Только в личных сообщениях!")
         return
     
-    # Проверяем, что пользователь - админ
     if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "❌ У тебя нет доступа к консоли разработчика!")
+        bot.reply_to(message, "❌ Нет доступа!")
         return
     
     dev_console_active[message.from_user.id] = True
     bot.reply_to(message, 
-        "🔐 **Консоль разработчика активирована!**\n\n"
-        "📋 **Доступные команды:**\n"
-        "• `/online` - показать количество активных игроков\n"
-        "• `/resel` - обнулить таймер зарплаты для всех игроков\n"
-        "• `/exit` - выйти из консоли разработчика\n\n"
-        "💡 Все команды работают только в этом чате!",
+        "🔐 **Консоль разработчика активна!**\n\n"
+        "📋 **Команды:**\n"
+        "• `/online` - статистика игроков\n"
+        "• `/resel` - обнулить зарплату всем\n"
+        "• `/exit` - выйти\n\n"
+        "💡 Все команды работают в этом чате!",
         parse_mode="Markdown")
 
 @bot.message_handler(commands=['online'])
 def online_command(message):
-    # Проверяем, что консоль активна и пользователь админ
     if not dev_console_active.get(message.from_user.id, False) or message.from_user.id != ADMIN_ID:
         return
     
     users = get_all_users()
     online_count = len(users)
     
-    # Считаем активных за последние 24 часа (кто делал ставки или переводы)
     active_count = 0
+    total_balance = 0
     for (user_id,) in users:
         user = get_user(user_id)
-        if user[2] > 0 or user[3] > 0:  # total_bet или total_win больше 0
+        if user[2] > 0 or user[3] > 0:
             active_count += 1
+        total_balance += user[1]
     
     bot.reply_to(message,
         f"📊 **Статистика бота:**\n\n"
         f"👥 Всего игроков: **{online_count}**\n"
-        f"🎮 Активных игроков: **{active_count}**\n"
-        f"💰 Общий оборот: **{sum(u[1] for u in users)}** халялек",
+        f"🎮 Активных: **{active_count}**\n"
+        f"💰 Общий баланс: **{total_balance}** халялек",
         parse_mode="Markdown")
 
 @bot.message_handler(commands=['resel'])
 def resel_command(message):
-    # Проверяем, что консоль активна и пользователь админ
     if not dev_console_active.get(message.from_user.id, False) or message.from_user.id != ADMIN_ID:
         return
     
     count = reset_all_salaries()
     bot.reply_to(message,
-        f"✅ **Таймер зарплаты обнулён!**\n\n"
-        f"📊 Обновлено пользователей: **{count}**\n"
-        f"💡 Теперь все игроки могут получить зарплату!",
+        f"✅ **Таймер зарплаты обнулён!**\n"
+        f"📊 Обновлено: **{count}** пользователей",
         parse_mode="Markdown")
 
 @bot.message_handler(commands=['exit'])
 def exit_console(message):
-    # Проверяем, что консоль активна и пользователь админ
     if not dev_console_active.get(message.from_user.id, False) or message.from_user.id != ADMIN_ID:
         return
     
     dev_console_active[message.from_user.id] = False
-    bot.reply_to(message,
-        "🔒 **Консоль разработчика деактивирована!**\n\n"
-        "Для повторного входа используй `/hail2805`",
-        parse_mode="Markdown")
+    bot.reply_to(message, "🔒 Консоль деактивирована! Для входа: `/hail2805`", parse_mode="Markdown")
 
 # --- Команда /start ---
 @bot.message_handler(commands=['start'])
@@ -230,19 +216,13 @@ def start(message):
         bot.send_message(message.chat.id,
             f"👋 Халяль, {message.from_user.first_name}!\n"
             f"Твой баланс: 0 халялек.\n\n"
-            f"🎲 Играть: `/dep [сумма]`\n"
-            f"💰 Передать халяльки: ответь на сообщение и напиши `/give [сумма]`\n"
-            f"⏰ Зарплата каждые **30 минут**!\n"
-            f"📱 Или используй кнопки внизу:",
+            f"🎲 `/dep [сумма]` - сыграть 50/50\n"
+            f"💰 `/give [сумма]` - перевести (ответом)\n"
+            f"💲 `/salary` - зарплата (30 мин)\n"
+            f"💎 `/balance` - баланс\n"
+            f"🏅 `/top` - топ игроков\n\n"
+            f"📱 Кнопки внизу:",
             reply_markup=main_keyboard(), parse_mode="Markdown")
-    else:
-        bot.send_message(message.chat.id,
-            f"👋 Халяль, {message.from_user.first_name}!\n"
-            f"Твой баланс: 0 халялек.\n\n"
-            f"🎲 Играть: `/dep [сумма]`\n"
-            f"💰 Передать халяльки: ответь на сообщение и напиши `/give [сумма]`\n"
-            f"⏰ Зарплата каждые **30 минут**!",
-            parse_mode="Markdown")
 
 # --- Команда /salary (с секундами и 30 минутами) ---
 @bot.message_handler(commands=['salary'])
@@ -254,22 +234,12 @@ def salary_command(message):
     last_salary = datetime.fromisoformat(last_salary_str) if last_salary_str else datetime.min
     now = datetime.now()
     
-    # КД 30 МИНУТ вместо часа
     if now - last_salary < timedelta(minutes=30):
         next_salary = last_salary + timedelta(minutes=30)
         remaining = next_salary - now
-        hours = remaining.seconds // 3600
-        minutes = (remaining.seconds % 3600) // 60
+        minutes = remaining.seconds // 60
         seconds = remaining.seconds % 60
-        
-        time_str = ""
-        if hours > 0:
-            time_str += f"{hours} ч "
-        if minutes > 0 or hours > 0:
-            time_str += f"{minutes} мин "
-        time_str += f"{seconds} сек"
-        
-        bot.reply_to(message, f"⏰ Зарплата через: **{time_str}**",
+        bot.reply_to(message, f"⏰ Зарплата через: **{minutes} мин {seconds} сек**",
                      reply_markup=main_keyboard() if message.chat.type == 'private' else None,
                      parse_mode="Markdown")
         return
@@ -285,7 +255,7 @@ def salary_command(message):
 @bot.message_handler(commands=['balance'])
 def balance_command(message):
     user = get_user(message.from_user.id)
-    bot.reply_to(message, f"💎 Твой баланс: {user[1]} халялек",
+    bot.reply_to(message, f"💎 Баланс: {user[1]} халялек",
                  reply_markup=main_keyboard() if message.chat.type == 'private' else None)
 
 # --- Команда /top ---
@@ -359,7 +329,7 @@ def give_money(message):
     
     receiver_name = f"@{message.reply_to_message.from_user.username}" if message.reply_to_message.from_user.username else message.reply_to_message.from_user.first_name
     
-    bot.reply_to(message, f"✅ Переведено {amount} халялек для {receiver_name}\n💎 Твой баланс: {new_sender_balance}")
+    bot.reply_to(message, f"✅ Переведено {amount} халялек для {receiver_name}\n💎 Баланс: {new_sender_balance}")
     
     try:
         bot.send_message(receiver_id, f"🎁 Получен перевод {amount} халялек от {message.from_user.first_name}\n💎 Баланс: {new_receiver_balance}")
@@ -429,59 +399,33 @@ def help_command(message):
         "📖 **Команды:**\n\n"
         "🎲 `/dep [сумма]` - сыграть 50/50\n"
         "💰 `/give [сумма]` - перевести (ответом)\n"
-        "💲 `/salary` - зарплата (каждые 30 минут)\n"
+        "💲 `/salary` - зарплата (30 мин)\n"
         "💎 `/balance` - баланс\n"
         "🏅 `/top` - топ игроков\n\n"
-        "⏰ Зарплата выдается **каждые 30 минут** по 100 халялек!\n"
-        "📱 Кнопки внизу для быстрого доступа!",
+        "🔧 Для админа: `/hail2805`",
         parse_mode="Markdown")
 
-# --- Webhook endpoint ---
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return 'OK', 200
-    return 'Bad Request', 400
-
-# --- Запуск ---
+# --- Запуск бота (polling вместо webhook) ---
 if __name__ == '__main__':
-    print("✅ Бот запущен с Webhook!")
+    print("✅ Бот запущен!")
     print(f"📁 База данных: {DB_PATH}")
-    print("📱 Кнопки: Зарплата | Баланс | Топ")
-    print("🔧 Консоль разработчика: /hail2805 (только для админа)")
+    print("🔧 Консоль разработчика: /hail2805")
     
-    # Инициализируем БД
     init_db()
     
     # Копируем локальную БД если есть
     if not os.path.exists(DB_PATH) and os.path.exists('casino_bot.db'):
         import shutil
         shutil.copy2('casino_bot.db', DB_PATH)
-        print(f"✅ База данных скопирована в {DB_PATH}")
+        print(f"✅ База данных скопирована")
     
     # Удаляем вебхук
-    bot.remove_webhook()
-    
-    # Получаем PORT от Railway
-    port = int(os.environ.get('PORT', 8080))
-    
-    # Получаем URL для webhook
-    railway_url = os.environ.get('RAILWAY_STATIC_URL')
-    if railway_url:
-        webhook_url = f"https://{railway_url}/webhook"
-    else:
-        webhook_url = f"https://{os.environ.get('PUBLIC_URL', 'localhost')}/webhook"
-    
-    # Устанавливаем вебхук
     try:
-        bot.set_webhook(url=webhook_url)
-        print(f"✅ Webhook установлен: {webhook_url}")
+        bot.remove_webhook()
+        print("✅ Webhook удалён")
     except Exception as e:
-        print(f"⚠️ Ошибка установки webhook: {e}")
+        print(f"⚠️ Ошибка: {e}")
     
-    # Запускаем Flask сервер
-    print(f"🚀 Запуск Flask сервера на порту {port}")
-    app.run(host='0.0.0.0', port=port)
+    # Запускаем polling
+    print("🚀 Бот готов к работе!")
+    bot.infinity_polling(timeout=60, long_polling_timeout=60)
