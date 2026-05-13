@@ -583,6 +583,69 @@ def dep(message):
         update_stats(user_id, bet, 0)
         bot.reply_to(message, f"❌ НЕ ХАЛЯЛЬ! -{bet}\n💲 Баланс: {new_balance}")
 
+# --- ЭКСТРЕННОЕ ОБНОВЛЕНИЕ ИМЁН (всех пользователей) ---
+@bot.message_handler(commands=['fixnames'])
+def fix_all_names(message):
+    # Проверяем, что команду вводит админ
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Нет доступа!")
+        return
+    
+    bot.reply_to(message, "🔄 Начинаю обновление имён всех пользователей... Это может занять время.")
+    
+    # Получаем всех пользователей из БД
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id FROM users')
+        users = cursor.fetchall()
+        conn.close()
+    
+    updated = 0
+    failed = 0
+    
+    for (user_id,) in users:
+        try:
+            # Пытаемся получить информацию о пользователе из Telegram
+            user_info = bot.get_chat(user_id)
+            
+            username = user_info.username or ''
+            full_name = ''
+            
+            if user_info.first_name:
+                if user_info.last_name:
+                    full_name = f"{user_info.first_name} {user_info.last_name}"
+                else:
+                    full_name = user_info.first_name
+            
+            # Обновляем в БД
+            with db_lock:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE users 
+                    SET username = ?, full_name = ? 
+                    WHERE user_id = ?
+                ''', (username, full_name, user_id))
+                conn.commit()
+                conn.close()
+            
+            updated += 1
+            print(f"✅ Обновлён: {user_id} -> {full_name or username}")
+            
+        except Exception as e:
+            failed += 1
+            print(f"❌ Ошибка для {user_id}: {e}")
+        
+        time.sleep(0.1)  # Пауза чтобы не превысить лимиты API
+    
+    bot.reply_to(message, 
+        f"✅ **Обновление завершено!**\n\n"
+        f"📊 Обновлено: **{updated}** пользователей\n"
+        f"❌ Ошибок: **{failed}**\n\n"
+        f"Теперь введи `/top` чтобы увидеть имена!",
+        parse_mode="Markdown")
+
 # --- Команда /help ---
 @bot.message_handler(commands=['help'])
 def help_command(message):
