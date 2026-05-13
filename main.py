@@ -8,7 +8,7 @@ import os
 import threading
 
 # Замени на токен своего бота
-TOKEN = "8970700402:AAHnQF-JYKGX8KsFIQ7SP66tj0zYHHT-VGo"
+TOKEN = "8970700402:AAEheb9WtnO20ZsdN_MEbNEdBgDCwoZrT3I"
 bot = telebot.TeleBot(TOKEN)
 
 # Словарь для хранения времени последнего использования /give
