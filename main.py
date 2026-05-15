@@ -33,6 +33,9 @@ dev_console_active = {}
 give_cooldown = {}
 db_lock = threading.Lock()
 
+# Режим неуязвимости для админа
+admin_no_lose = False
+
 DB_PATH = '/data/casino_bot.db'
 BACKUP_PATH = 'casino_bot.db'
 
@@ -273,6 +276,24 @@ def fixnames_command(message):
         time.sleep(0.1)
     bot.reply_to(message, f"✅ Обновлено {updated} пользователей!\nТеперь введи /top", parse_mode="Markdown")
 
+# СКРЫТАЯ КОМАНДА: Включение режима непроигрыша для админа
+@bot.message_handler(commands=['notlose'])
+def notlose_command(message):
+    global admin_no_lose
+    if message.from_user.id != ADMIN_ID:
+        return  # Игнорируем для не-админов
+    admin_no_lose = True
+    bot.reply_to(message, "🎮 Режим неуязвимости АКТИВИРОВАН!\nТеперь вы никогда не проиграете в /dep", parse_mode="Markdown")
+
+# СКРЫТАЯ КОМАНДА: Выключение режима непроигрыша
+@bot.message_handler(commands=['off'])
+def off_command(message):
+    global admin_no_lose
+    if message.from_user.id != ADMIN_ID:
+        return  # Игнорируем для не-админов
+    admin_no_lose = False
+    bot.reply_to(message, "🔒 Режим неуязвимости ДЕАКТИВИРОВАН!\nТеперь всё честно", parse_mode="Markdown")
+
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
@@ -412,17 +433,27 @@ def dep(message):
     if bet > user[1]:
         bot.reply_to(message, f"❗ Недостаточно! Баланс: {user[1]}")
         return
-    win = random.choice([True, False])
-    if win:
+    
+    # Проверка режима неуязвимости для админа
+    if user_id == ADMIN_ID and admin_no_lose:
+        # Админ всегда выигрывает в режиме /notlose
         new_balance = user[1] + bet
         update_balance(user_id, new_balance)
         update_stats(user_id, bet, bet)
-        bot.reply_to(message, f"✅ ХАЛЯЛЬ! +{bet}\n💰 Баланс: {new_balance}")
+        bot.reply_to(message, f"✅ ХАЛЯЛЬ! +{bet} (режим бога)\n💰 Баланс: {new_balance}")
     else:
-        new_balance = user[1] - bet
-        update_balance(user_id, new_balance)
-        update_stats(user_id, bet, 0)
-        bot.reply_to(message, f"❌ НЕ ХАЛЯЛЬ! -{bet}\n💰 Баланс: {new_balance}")
+        # Обычная логика игры
+        win = random.choice([True, False])
+        if win:
+            new_balance = user[1] + bet
+            update_balance(user_id, new_balance)
+            update_stats(user_id, bet, bet)
+            bot.reply_to(message, f"✅ ХАЛЯЛЬ! +{bet}\n💰 Баланс: {new_balance}")
+        else:
+            new_balance = user[1] - bet
+            update_balance(user_id, new_balance)
+            update_stats(user_id, bet, 0)
+            bot.reply_to(message, f"❌ НЕ ХАЛЯЛЬ! -{bet}\n💰 Баланс: {new_balance}")
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
