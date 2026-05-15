@@ -511,9 +511,10 @@ def handle_duel_response(call):
         update_stats(winner_id, amount, amount * 2)
         update_stats(loser_id, amount, 0)
         
+        # Результат дуэли без упоминания проигравшего
         bot.send_message(
             call.message.chat.id,
-            f"⚔️ **РЕЗУЛЬТАТ ДУЭЛИ** ⚔️\n\n🏆 Победитель: {get_user_full_name(winner_id)}\n💀 Проигравший: {get_user_full_name(loser_id)}\n\n💰 {get_user_full_name(winner_id)} выигрывает {amount * 2} халялек!",
+            f"⚔️ **РЕЗУЛЬТАТ ДУЭЛИ** ⚔️\n\n🏆 Победитель: {get_user_full_name(winner_id)}\n\n💰 {get_user_full_name(winner_id)} выигрывает {amount * 2} халялек!",
             parse_mode="Markdown"
         )
         
