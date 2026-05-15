@@ -8,6 +8,10 @@ import os
 import threading
 import shutil
 
+# Фикс для предупреждения datetime в sqlite3
+sqlite3.register_adapter(datetime, lambda dt: dt.isoformat())
+sqlite3.register_converter("timestamp", lambda b: datetime.fromisoformat(b.decode()))
+
 TOKEN = "8970700402:AAEheb9WtnO20ZsdN_MEbNEdBgDCwoZrT3I"
 bot = telebot.TeleBot(TOKEN)
 
@@ -41,7 +45,7 @@ DB_PATH = '/data/casino_bot.db'
 BACKUP_PATH = 'casino_bot.db'
 
 def get_db_connection():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    return sqlite3.connect(DB_PATH, check_same_thread=False, detect_types=sqlite3.PARSE_DECLTYPES)
 
 def update_user_info(user_id, username, full_name):
     with db_lock:
@@ -221,7 +225,7 @@ def dev_console(message):
         bot.reply_to(message, "❌ Нет доступа!")
         return
     dev_console_active[message.from_user.id] = True
-    bot.reply_to(message, "🔐 **Консоль активна!**\n\n/online - статистика\n/resel - обнулить зарплату\n/fixnames - обновить имена\n/exit - выйти", parse_mode="Markdown")
+    bot.reply_to(message, "🔐 **Консоль активна!**\n\n/online - статистика\n/resel - обнулить зарплату\n/fixnames - обновить имена\n/add - выдать халяльки\n/remove - забрать халяльки\n/exit - выйти", parse_mode="Markdown")
 
 @bot.message_handler(commands=['online'])
 def online_command(message):
@@ -277,6 +281,85 @@ def fixnames_command(message):
         time.sleep(0.1)
     bot.reply_to(message, f"✅ Обновлено {updated} пользователей!\nТеперь введи /top", parse_mode="Markdown")
 
+# АДМИН-КОМАНДА: Выдать халяльки (ответом на сообщение)
+@bot.message_handler(commands=['add'])
+def add_money(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    if not message.reply_to_message:
+        bot.reply_to(message, "❗ Ответьте на сообщение пользователя!\nПример: ответьте на сообщение и напишите /add 500")
+        return
+    
+    args = message.text.split()
+    if len(args) != 2:
+        bot.reply_to(message, "❗ /add [сумма]\nПример: /add 500")
+        return
+    
+    try:
+        amount = int(args[1])
+        if amount <= 0:
+            bot.reply_to(message, "❗ Сумма должна быть больше 0")
+            return
+    except:
+        bot.reply_to(message, "❗ Введите число")
+        return
+    
+    target_id = message.reply_to_message.from_user.id
+    target = get_user(target_id)
+    new_balance = target[1] + amount
+    update_balance(target_id, new_balance)
+    
+    target_name = get_user_full_name(target_id)
+    bot.reply_to(message, f"✅ Выдано {amount} халялек пользователю {target_name}\n💰 Новый баланс: {new_balance}")
+    
+    try:
+        bot.send_message(target_id, f"🎁 Администратор выдал вам {amount} халялек!\n💰 Ваш баланс: {new_balance}")
+    except:
+        pass
+
+# АДМИН-КОМАНДА: Забрать халяльки (ответом на сообщение)
+@bot.message_handler(commands=['remove'])
+def remove_money(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    if not message.reply_to_message:
+        bot.reply_to(message, "❗ Ответьте на сообщение пользователя!\nПример: ответьте на сообщение и напишите /remove 500")
+        return
+    
+    args = message.text.split()
+    if len(args) != 2:
+        bot.reply_to(message, "❗ /remove [сумма]\nПример: /remove 500")
+        return
+    
+    try:
+        amount = int(args[1])
+        if amount <= 0:
+            bot.reply_to(message, "❗ Сумма должна быть больше 0")
+            return
+    except:
+        bot.reply_to(message, "❗ Введите число")
+        return
+    
+    target_id = message.reply_to_message.from_user.id
+    target = get_user(target_id)
+    
+    if target[1] < amount:
+        bot.reply_to(message, f"❗ У пользователя недостаточно халялек! Баланс: {target[1]}")
+        return
+    
+    new_balance = target[1] - amount
+    update_balance(target_id, new_balance)
+    
+    target_name = get_user_full_name(target_id)
+    bot.reply_to(message, f"✅ Забрано {amount} халялек у пользователя {target_name}\n💰 Новый баланс: {new_balance}")
+    
+    try:
+        bot.send_message(target_id, f"⚠️ Администратор забрал у вас {amount} халялек!\n💰 Ваш баланс: {new_balance}")
+    except:
+        pass
+
 @bot.message_handler(commands=['notlose'])
 def notlose_command(message):
     global admin_no_lose
@@ -312,8 +395,7 @@ def start(message):
 def salary_command(message):
     user_id = message.from_user.id
     user = get_user(user_id)
-    last_salary_str = user[4]
-    last_salary = datetime.fromisoformat(last_salary_str) if last_salary_str else datetime.min
+    last_salary = user[4]
     now = datetime.now()
     if now - last_salary < timedelta(minutes=30):
         next_salary = last_salary + timedelta(minutes=30)
@@ -511,7 +593,6 @@ def handle_duel_response(call):
         update_stats(winner_id, amount, amount * 2)
         update_stats(loser_id, amount, 0)
         
-        # Результат дуэли без упоминания проигравшего
         bot.send_message(
             call.message.chat.id,
             f"⚔️ **РЕЗУЛЬТАТ ДУЭЛИ** ⚔️\n\n🏆 Победитель: {get_user_full_name(winner_id)}\n\n💰 {get_user_full_name(winner_id)} выигрывает {amount * 2} халялек!",
@@ -595,7 +676,28 @@ def dep(message):
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
-    bot.reply_to(message, "📖 **Команды:**\n\n/dep [сумма] - играть 50/50\n/duel [сумма] (ответом) - дуэль\n/give [сумма] - перевод\n/salary - зарплата (30 мин)\n/balance - баланс\n/top - топ игроков")
+    if message.from_user.id == ADMIN_ID:
+        bot.reply_to(message, "📖 **Команды:**\n\n"
+                            "/dep [сумма] - играть 50/50\n"
+                            "/duel [сумма] (ответом) - дуэль\n"
+                            "/give [сумма] - перевод\n"
+                            "/salary - зарплата (30 мин)\n"
+                            "/balance - баланс\n"
+                            "/top - топ игроков\n\n"
+                            "👑 **Админ-команды:**\n"
+                            "/add [сумма] (ответом) - выдать халяльки\n"
+                            "/remove [сумма] (ответом) - забрать халяльки\n"
+                            "/fixnames - обновить имена\n"
+                            "/notlose - включить режим 100% победы\n"
+                            "/off - выключить режим 100% победы")
+    else:
+        bot.reply_to(message, "📖 **Команды:**\n\n"
+                            "/dep [сумма] - играть 50/50\n"
+                            "/duel [сумма] (ответом) - дуэль\n"
+                            "/give [сумма] - перевод\n"
+                            "/salary - зарплата (30 мин)\n"
+                            "/balance - баланс\n"
+                            "/top - топ игроков")
 
 if __name__ == '__main__':
     print("🚀 ЗАПУСК БОТА")
