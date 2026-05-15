@@ -1,5 +1,5 @@
 import telebot
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton, BotCommand
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 import random
 import sqlite3
 from datetime import datetime, timedelta
@@ -15,6 +15,7 @@ def set_bot_commands():
     commands = [
         BotCommand("start", "🚀 Запустить бота"),
         BotCommand("dep", "🎲 Сыграть 50/50"),
+        BotCommand("duel", "⚔️ Вызвать на дуэль"),
         BotCommand("give", "💰 Передать халяльки"),
         BotCommand("salary", "💲 Получить зарплату"),
         BotCommand("balance", "💎 Баланс"),
@@ -31,6 +32,7 @@ def set_bot_commands():
 ADMIN_ID = 7818787996
 dev_console_active = {}
 give_cooldown = {}
+duel_requests = {}  # {challenger_id: {"opponent_id": int, "amount": int, "timestamp": float}}
 db_lock = threading.Lock()
 
 # Режим неуязвимости для админа
@@ -281,7 +283,7 @@ def fixnames_command(message):
 def notlose_command(message):
     global admin_no_lose
     if message.from_user.id != ADMIN_ID:
-        return  # Игнорируем для не-админов
+        return
     admin_no_lose = True
     bot.reply_to(message, "🎮 Режим неуязвимости АКТИВИРОВАН!\nТеперь вы никогда не проиграете в /dep", parse_mode="Markdown")
 
@@ -290,7 +292,7 @@ def notlose_command(message):
 def off_command(message):
     global admin_no_lose
     if message.from_user.id != ADMIN_ID:
-        return  # Игнорируем для не-админов
+        return
     admin_no_lose = False
     bot.reply_to(message, "🔒 Режим неуязвимости ДЕАКТИВИРОВАН!\nТеперь всё честно", parse_mode="Markdown")
 
@@ -307,7 +309,7 @@ def start(message):
     except:
         pass
     if message.chat.type == 'private':
-        bot.send_message(message.chat.id, f"👋 Халяль, {message.from_user.first_name}!\n💰 Баланс: {user[1]} халялек\n\n🎲 /dep 100 - играть\n💲 /salary - зарплата\n💰 /give - перевод\n💎 /balance - баланс\n🏅 /top - топ", reply_markup=main_keyboard())
+        bot.send_message(message.chat.id, f"👋 Халяль, {message.from_user.first_name}!\n💰 Баланс: {user[1]} халялек\n\n🎲 /dep 100 - играть\n⚔️ /duel @username 100 - дуэль\n💲 /salary - зарплата\n💰 /give - перевод\n💎 /balance - баланс\n🏅 /top - топ", reply_markup=main_keyboard())
 
 @bot.message_handler(commands=['salary'])
 def salary_command(message):
@@ -396,6 +398,216 @@ def give_money(message):
     except:
         pass
 
+# ДУЭЛЬ - вызов на дуэль
+@bot.message_handler(commands=['duel'])
+def duel_command(message):
+    user_id = message.from_user.id
+    args = message.text.split()
+    
+    if len(args) != 2:
+        bot.reply_to(message, "❗ /duel @username [сумма]\nПример: /duel @player 500")
+        return
+    
+    try:
+        amount = int(args[1])
+        if amount <= 0:
+            bot.reply_to(message, "❗ Сумма должна быть больше 0")
+            return
+    except:
+        bot.reply_to(message, "❗ Введите число (сумму ставки)")
+        return
+    
+    # Проверка, указан ли соперник через реплай или упоминание
+    opponent_id = None
+    opponent_name = None
+    
+    if message.reply_to_message:
+        opponent_id = message.reply_to_message.from_user.id
+        opponent_name = message.reply_to_message.from_user.first_name
+    else:
+        bot.reply_to(message, "❗ Ответьте на сообщение соперника или укажите @username\nПример: /duel @player 500")
+        return
+    
+    if opponent_id == user_id:
+        bot.reply_to(message, "❌ Нельзя вызвать самого себя на дуэль!")
+        return
+    
+    # Проверка баланса вызывающего
+    challenger = get_user(user_id)
+    if challenger[1] < amount:
+        bot.reply_to(message, f"❗ Недостаточно халялек! Ваш баланс: {challenger[1]}")
+        return
+    
+    # Проверка баланса соперника
+    opponent = get_user(opponent_id)
+    if opponent[1] < amount:
+        opponent_name_display = get_user_full_name(opponent_id)
+        bot.reply_to(message, f"❌ У {opponent_name_display} недостаточно халялек для дуэли! Нужно: {amount}")
+        return
+    
+    # Сохраняем запрос на дуэль
+    duel_requests[user_id] = {
+        "opponent_id": opponent_id,
+        "amount": amount,
+        "timestamp": time.time()
+    }
+    
+    # Отправляем инлайн-кнопки сопернику
+    challenger_name = get_user_full_name(user_id)
+    keyboard = InlineKeyboardMarkup()
+    accept_btn = InlineKeyboardButton("✅ Принять", callback_data=f"duel_accept_{user_id}_{amount}")
+    decline_btn = InlineKeyboardButton("❌ Отклонить", callback_data=f"duel_decline_{user_id}")
+    keyboard.add(accept_btn, decline_btn)
+    
+    bot.send_message(
+        opponent_id,
+        f"⚔️ **ВЫЗОВ НА ДУЭЛЬ!** ⚔️\n\n"
+        f"{challenger_name} вызывает вас на дуэль!\n"
+        f"💰 Ставка: {amount} халялек\n\n"
+        f"Победитель забирает обе ставки ({amount*2} халялек)\n"
+        f"Проигравший теряет свою ставку",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+    
+    bot.reply_to(message, f"✅ Вызов отправлен!\nОжидайте ответа от {get_user_full_name(opponent_id)}")
+
+# Обработка инлайн-кнопок дуэли
+@bot.callback_query_handler(func=lambda call: call.data.startswith(('duel_accept_', 'duel_decline_')))
+def handle_duel_response(call):
+    opponent_id = call.from_user.id
+    
+    if call.data.startswith('duel_accept_'):
+        # Формат: duel_accept_challenger_id_amount
+        parts = call.data.split('_')
+        challenger_id = int(parts[2])
+        amount = int(parts[3])
+        
+        # Проверяем, существует ли еще запрос
+        if challenger_id not in duel_requests:
+            bot.answer_callback_query(call.id, "⏰ Запрос на дуэль устарел!")
+            bot.edit_message_text(
+                "❌ Запрос на дуэль устарел или был отменен",
+                call.message.chat.id,
+                call.message.message_id
+            )
+            return
+        
+        duel_data = duel_requests[challenger_id]
+        
+        # Проверяем, что вызывающий и соперник совпадают
+        if duel_data["opponent_id"] != opponent_id or duel_data["amount"] != amount:
+            bot.answer_callback_query(call.id, "❌ Данные дуэли не совпадают!")
+            return
+        
+        # Проверяем балансы перед началом дуэли
+        challenger = get_user(challenger_id)
+        opponent = get_user(opponent_id)
+        
+        if challenger[1] < amount:
+            bot.answer_callback_query(call.id, "❌ У вызывающего недостаточно халялек!")
+            del duel_requests[challenger_id]
+            bot.edit_message_text(
+                f"❌ Дуэль отменена: у {get_user_full_name(challenger_id)} недостаточно халялек!",
+                call.message.chat.id,
+                call.message.message_id
+            )
+            return
+        
+        if opponent[1] < amount:
+            bot.answer_callback_query(call.id, "❌ У вас недостаточно халялек для дуэли!")
+            del duel_requests[challenger_id]
+            bot.edit_message_text(
+                "❌ Дуэль отменена: у вас недостаточно халялек!",
+                call.message.chat.id,
+                call.message.message_id
+            )
+            return
+        
+        # Удаляем запрос
+        del duel_requests[challenger_id]
+        
+        # Списываем ставки
+        new_challenger_balance = challenger[1] - amount
+        new_opponent_balance = opponent[1] - amount
+        update_balance(challenger_id, new_challenger_balance)
+        update_balance(opponent_id, new_opponent_balance)
+        
+        # Сообщаем о начале дуэли
+        bot.edit_message_text(
+            f"⚔️ **ДУЭЛЬ НАЧАЛАСЬ!** ⚔️\n\n"
+            f"{get_user_full_name(challenger_id)} vs {get_user_full_name(opponent_id)}\n"
+            f"💰 Ставка: {amount} халялек\n"
+            f"🏆 Победитель получит {amount * 2} халялек!\n\n"
+            f"🎲 Определяем победителя...",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+        # Задержка перед определением победителя
+        time.sleep(2)
+        
+        # Рандомный выбор победителя
+        winner_id = random.choice([challenger_id, opponent_id])
+        loser_id = opponent_id if winner_id == challenger_id else challenger_id
+        
+        # Победитель получает общий банк (amount * 2)
+        winner_balance = get_user(winner_id)[1]
+        new_winner_balance = winner_balance + (amount * 2)
+        update_balance(winner_id, new_winner_balance)
+        
+        # Обновляем статистику
+        update_stats(winner_id, amount, amount * 2)
+        update_stats(loser_id, amount, 0)
+        
+        winner_name = get_user_full_name(winner_id)
+        loser_name = get_user_full_name(loser_id)
+        
+        # Результат дуэли
+        result_text = (
+            f"⚔️ **РЕЗУЛЬТАТ ДУЭЛИ** ⚔️\n\n"
+            f"🏆 **ПОБЕДИТЕЛЬ:** {winner_name}\n"
+            f"💀 **ПРОИГРАВШИЙ:** {loser_name}\n\n"
+            f"💰 {winner_name} выигрывает {amount * 2} халялек!\n"
+            f"📉 {loser_name} теряет {amount} халялек\n\n"
+            f"✨ Поздравляем победителя! ✨"
+        )
+        
+        bot.send_message(call.message.chat.id, result_text, parse_mode="Markdown")
+        
+        # Отправляем личные сообщения
+        try:
+            bot.send_message(winner_id, f"🎉 ПОБЕДА В ДУЭЛИ! Вы выиграли {amount * 2} халялек!\n💰 Ваш баланс: {new_winner_balance}")
+        except:
+            pass
+        
+        try:
+            loser_balance = get_user(loser_id)[1]
+            bot.send_message(loser_id, f"💀 ПОРАЖЕНИЕ В ДУЭЛИ! Вы проиграли {amount} халялек!\n💰 Ваш баланс: {loser_balance}")
+        except:
+            pass
+    
+    elif call.data.startswith('duel_decline_'):
+        # Отклонение дуэли
+        challenger_id = int(call.data.split('_')[2])
+        
+        if challenger_id in duel_requests:
+            del duel_requests[challenger_id]
+        
+        bot.answer_callback_query(call.id, "❌ Вы отклонили дуэль")
+        bot.edit_message_text(
+            f"❌ {get_user_full_name(call.from_user.id)} отклонил(а) вызов на дуэль",
+            call.message.chat.id,
+            call.message.message_id
+        )
+        
+        # Уведомляем вызывающего
+        try:
+            bot.send_message(challenger_id, f"❌ {get_user_full_name(call.from_user.id)} отклонил(а) ваш вызов на дуэль!")
+        except:
+            pass
+
 @bot.message_handler(func=lambda message: message.text == "💲 Зарплата")
 def salary_button(message):
     if message.chat.type != 'private':
@@ -436,13 +648,11 @@ def dep(message):
     
     # Проверка режима неуязвимости для админа
     if user_id == ADMIN_ID and admin_no_lose:
-        # Админ всегда выигрывает в режиме /notlose
         new_balance = user[1] + bet
         update_balance(user_id, new_balance)
         update_stats(user_id, bet, bet)
         bot.reply_to(message, f"✅ ХАЛЯЛЬ! +{bet} (режим бога)\n💰 Баланс: {new_balance}")
     else:
-        # Обычная логика игры
         win = random.choice([True, False])
         if win:
             new_balance = user[1] + bet
@@ -457,13 +667,28 @@ def dep(message):
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
-    bot.reply_to(message, "📖 **Команды:**\n\n/dep [сумма] - играть\n/give [сумма] - перевод\n/salary - зарплата (30 мин)\n/balance - баланс\n/top - топ игроков\n/fixnames - обновить имена (админ)")
+    bot.reply_to(message, "📖 **Команды:**\n\n/dep [сумма] - играть 50/50\n/duel [сумма] (ответом) - дуэль\n/give [сумма] - перевод\n/salary - зарплата (30 мин)\n/balance - баланс\n/top - топ игроков\n/fixnames - обновить имена (админ)")
 
 if __name__ == '__main__':
     print("🚀 ЗАПУСК БОТА")
     force_load_database()
     init_db()
     set_bot_commands()
+    # Очистка старых запросов на дуэль (каждые 60 секунд)
+    def clean_old_duels():
+        while True:
+            time.sleep(60)
+            current_time = time.time()
+            to_delete = []
+            for challenger_id, data in duel_requests.items():
+                if current_time - data["timestamp"] > 120:  # 2 минуты
+                    to_delete.append(challenger_id)
+            for challenger_id in to_delete:
+                del duel_requests[challenger_id]
+    
+    cleanup_thread = threading.Thread(target=clean_old_duels, daemon=True)
+    cleanup_thread.start()
+    
     try:
         bot.remove_webhook()
         print("✅ Webhook удалён")
